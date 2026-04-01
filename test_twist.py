@@ -19,7 +19,7 @@ class MoverStatus:
     z: float
 
 XPLANAR_ERRORS = {
-    33105: "33105: Command not allowed in current mode. Mover needs to be enabled and off the track.",
+    33105: "33105: Command not allowed in current mode. System must be initalized and movers must be lifted off the track.",
     33155: "33155: Target position out of bounds",
     33158: "33158: Move would collide with another mover",
 }
@@ -32,9 +32,28 @@ class XPlanarController:
         self.plc: pyads.Connection = None
 
     def connect(self):
+        '''Establish PyADS connection using the ADS route we established.'''
         self.plc = pyads.Connection(self.ams_net_id, self.port, self.local_ip)
         self.plc.open()
         print(f"Connected to {self.ams_net_id}:{self.port}")
+
+    def initialize(self):
+        """Toggle ResetPressed to prepare system for Start."""
+        symbol = "MAIN.ControlSourceHMI.MainPMLControl_Simplified.ResetPressed"
+
+        print("ResetPressed --> TRUE")
+        self.plc.write_by_name(symbol, True, pyads.PLCTYPE_BOOL)
+        time.sleep(3.0)
+
+        print("ResetPressed --> FALSE")
+        self.plc.write_by_name(symbol, False, pyads.PLCTYPE_BOOL)
+        time.sleep(3.0)
+
+        print("ResetPressed --> TRUE")
+        self.plc.write_by_name(symbol, True, pyads.PLCTYPE_BOOL)
+        time.sleep(7.0)
+
+        print("System initialized, movers lifted from track")
 
     def disconnect(self):
         if self.plc:
@@ -132,19 +151,21 @@ class XPlanarController:
 
 
 if __name__ == "__main__":
-    ctrl = XPlanarController(
+    system = XPlanarController(
         ams_net_id="169.254.137.138.1.1",
         port=852,
         local_ip="172.24.68.147",
     )
-    ctrl.connect()
+    system.connect()
+    system.initialize() #equivalent to manually toggling ResetPressed. NOTE: this only needs to be pressed once when turned on!
+    #sometimes, this takes two tries to work. 
 
     try:
             for m in (1, 2):
-                pos = ctrl.get_mover_position(m)
+                pos = system.get_mover_position(m)
                 print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-            ctrl.move_to(2, 150.0, 350.0, velocity=5) #mover, x pos, y pos
+            system.move_to(2, 100.0, 350.0, velocity=10) #mover, x pos, y pos
 
     finally:
-        ctrl.disconnect()
+        system.disconnect()
