@@ -166,7 +166,7 @@ if __name__ == "__main__":
                 pos = system.get_mover_position(m)
                 print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-            system.move_to(2, 150.0, 350.0, velocity=10) #mover, x pos, y pos
+            system.move_to(2, 100.0, 350.0, velocity=10) #mover, x pos, y pos
 
     finally:
         system.disconnect()
