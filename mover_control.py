@@ -122,6 +122,7 @@ class XPlanarController:
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             status = self.get_cmd_status(mover_id)
+            print(f"  Mover {mover_id}: ({status.x:.1f}, {status.y:.1f}, {status.z:.1f})")
             if status.done:
                 self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} arrived at ({status.x:.1f}, {status.y:.1f})")
@@ -165,7 +166,7 @@ if __name__ == "__main__":
                 pos = system.get_mover_position(m)
                 print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-            system.move_to(2, 100.0, 350.0, velocity=10) #mover, x pos, y pos
+            system.move_to(2, 150.0, 350.0, velocity=10) #mover, x pos, y pos
 
     finally:
         system.disconnect()
