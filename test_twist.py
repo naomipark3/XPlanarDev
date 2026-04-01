@@ -18,6 +18,11 @@ class MoverStatus:
     y: float
     z: float
 
+XPLANAR_ERRORS = {
+    33105: "Command not allowed in current mode",
+    33155: "Target position out of bounds",
+    33158: "Move would collide with another mover",
+}
 
 class XPlanarController:
     def __init__(self, ams_net_id: str, port: int = 852, local_ip: str = None):
@@ -74,7 +79,7 @@ class XPlanarController:
         """
         prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
 
-        # Check not already busy
+        #Check not already busy
         status = self.get_cmd_status(mover_id)
         if status.busy:
             print(f"Mover {mover_id} is busy, waiting...")
@@ -82,7 +87,7 @@ class XPlanarController:
                 print(f"Mover {mover_id} still busy after {timeout}s")
                 return False
 
-        # Write target and trigger
+        #Write target and trigger
         self.plc.write_by_name(f"{prefix}.fTargetX", x, pyads.PLCTYPE_LREAL)
         self.plc.write_by_name(f"{prefix}.fTargetY", y, pyads.PLCTYPE_LREAL)
         self.plc.write_by_name(f"{prefix}.bExecute", True, pyads.PLCTYPE_BOOL)
@@ -91,7 +96,7 @@ class XPlanarController:
         if not block:
             return True
 
-        # Wait for completion
+        #Wait for completion
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             status = self.get_cmd_status(mover_id)
@@ -101,8 +106,9 @@ class XPlanarController:
                 return True
             if status.error:
                 error_id = self.plc.read_by_name(f"{prefix}.nErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown error {error_id}")
                 self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
-                print(f"Mover {mover_id} ERROR during move (ErrorID: {error_id})")
+                print(f"Mover {mover_id} rejected: {msg}")
                 return False
             time.sleep(poll_interval)
 
@@ -131,28 +137,11 @@ if __name__ == "__main__":
     ctrl.connect()
 
     try:
-        for m in (1, 2):
-            pos = ctrl.get_mover_position(m)
-            print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
+            for m in (1, 2):
+                pos = ctrl.get_mover_position(m)
+                print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-        # Manual polling so we can see the step
-        prefix = "GVL_Cmd.aMoverCmd[1]"
-        ctrl.plc.write_by_name(f"{prefix}.fTargetX", 100.0, pyads.PLCTYPE_LREAL)
-        ctrl.plc.write_by_name(f"{prefix}.fTargetY", 100.0, pyads.PLCTYPE_LREAL)
-        ctrl.plc.write_by_name(f"{prefix}.bExecute", True, pyads.PLCTYPE_BOOL)
-        print("Mover 1 -> (150.0, 150.0)")
-
-        import time
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 10.0:
-            status = ctrl.get_cmd_status(1)
-            step = ctrl.plc.read_by_name(f"{prefix}.nStep", pyads.PLCTYPE_UDINT)
-            print(f"  step={step} busy={status.busy} done={status.done} err={status.error} pos=({status.x:.1f},{status.y:.1f})")
-            if status.done or status.error:
-                break
-            time.sleep(0.5)
-
-        ctrl.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
+            ctrl.move_to(2, 50.0, 300.0)
 
     finally:
         ctrl.disconnect()
