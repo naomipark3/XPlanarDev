@@ -19,9 +19,9 @@ class MoverStatus:
     z: float
 
 XPLANAR_ERRORS = {
-    33105: "Command not allowed in current mode",
-    33155: "Target position out of bounds",
-    33158: "Move would collide with another mover",
+    33105: "33105: Command not allowed in current mode. Mover needs to be enabled and off the track.",
+    33155: "33155: Target position out of bounds",
+    33158: "33158: Move would collide with another mover",
 }
 
 class XPlanarController:
@@ -61,8 +61,8 @@ class XPlanarController:
             x=x, y=y, z=z,
         )
 
-    def move_to(self, mover_id: int, x: float, y: float, block: bool = True,
-                timeout: float = 10.0, poll_interval: float = 0.05) -> bool:
+    def move_to(self, mover_id: int, x: float, y: float, velocity: float = 300.0, accel: float = 2000.0, decel: float = 2000.0, 
+                block: bool = True, timeout: float = 30.0, poll_interval: float = 0.05) -> bool:
         """
         Command a mover to an (x, y) position.
 
@@ -90,6 +90,9 @@ class XPlanarController:
         #Write target and trigger
         self.plc.write_by_name(f"{prefix}.fTargetX", x, pyads.PLCTYPE_LREAL)
         self.plc.write_by_name(f"{prefix}.fTargetY", y, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fVelocity", velocity, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fAccel", accel, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fDecel", decel, pyads.PLCTYPE_LREAL)
         self.plc.write_by_name(f"{prefix}.bExecute", True, pyads.PLCTYPE_BOOL)
         print(f"Mover {mover_id} -> ({x:.1f}, {y:.1f})")
 
@@ -141,7 +144,7 @@ if __name__ == "__main__":
                 pos = ctrl.get_mover_position(m)
                 print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-            ctrl.move_to(2, 50.0, 300.0)
+            ctrl.move_to(2, 150.0, 350.0, velocity=5) #mover, x pos, y pos
 
     finally:
         ctrl.disconnect()
