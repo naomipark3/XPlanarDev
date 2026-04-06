@@ -84,17 +84,16 @@ class XPlanarController:
                 block: bool = True, timeout: float = 30.0, poll_interval: float = 0.05) -> bool:
         """
         Command a mover to an (x, y) position.
-
         Args:
-            mover_id: 1-based mover index
-            x, y: target position in mm
-            block: if True, wait until move completes or times out
-            timeout: max seconds to wait (only if block=True)
-            poll_interval: seconds between status polls
+        - mover_id: 1-based mover index
+        - x, y: target position in mm
+        - block: if True, wait until move completes or times out
+        - timeout: max seconds to wait (only if block=True)
+        - poll_interval: seconds between status polls
 
         Returns:
-            True if move completed successfully (or if non-blocking),
-            False if error or timeout.
+        True if move completed successfully (or if non-blocking),
+        False if error or timeout.
         """
         prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
 
@@ -120,10 +119,11 @@ class XPlanarController:
 
         #Wait for completion
         t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout:
+        while time.monotonic() - t0 < timeout: #this approach uses a timeout for the closed loop,
+            #but we could restructure this to be a dynamically calculated based on the trajectory
             status = self.get_cmd_status(mover_id)
             print(f"  Mover {mover_id}: ({status.x:.1f}, {status.y:.1f}, {status.z:.1f})")
-            if status.done:
+            if status.done: #we're also polling based on status and not position. I guess we could restructure the loop to be while status is not done
                 self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} arrived at ({status.x:.1f}, {status.y:.1f})")
                 return True
@@ -135,12 +135,15 @@ class XPlanarController:
                 return False
             time.sleep(poll_interval)
 
-        # Timeout
+        #Timeout
         self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
         print(f"Mover {mover_id} TIMEOUT after {timeout}s")
         return False
 
     def _wait_not_busy(self, mover_id: int, timeout: float) -> bool:
+        '''Polls bBusy every 50 ms until the mover is no longer busy (returns True) 
+        or timeout expires (returns False) so that if a mover is already busy from 
+        a previous command, it waits before sending a new one.'''
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             if not self.plc.read_by_name(
@@ -166,7 +169,7 @@ if __name__ == "__main__":
                 pos = system.get_mover_position(m)
                 print(f"Mover {m} at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
 
-            system.move_to(2, 100.0, 350.0, velocity=10) #mover, x pos, y pos
+            system.move_to(2, 100.0, 350.0, velocity=50) #mover, x pos, y pos. Can specify vel, acceleration, deceleration
 
     finally:
         system.disconnect()

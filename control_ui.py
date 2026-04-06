@@ -15,8 +15,7 @@ class ADSApp:
         self.plc = None
         self.polling = False
         self.poll_thread = None
-
-        # Update these defaults to match your setup
+        
         self.ams_net_id = tk.StringVar(value="169.254.137.138.1.1")
         self.ams_port = tk.StringVar(value="852")
         self.local_ip = tk.StringVar(value="172.24.68.147")
