@@ -7,6 +7,7 @@ Requires the ST_MoverCommand struct and GVL_Cmd to be added to the TwinCAT proje
 import pyads
 import time
 import math
+import heapq
 from dataclasses import dataclass
 
 
@@ -33,12 +34,12 @@ class XPlanarController:
     MOVER_SIZE  = 113.0     # mover footprint edge length
     NUM_MOVERS  = 2
 
-    # TwinCAT treats movers as bounding circles (diameter = diagonal of square).
-    # Diagonal of 113 mm square = 113 * sqrt(2) ≈ 159.8 mm.
-    # Min center-to-center = one full diagonal + safety buffer.
-    MOVER_DIAGONAL = MOVER_SIZE * 1.4143            # ~159.8 mm
-    SAFETY_MARGIN = 20.0                            # mm buffer beyond contact
-    MIN_CLEARANCE = MOVER_DIAGONAL + SAFETY_MARGIN  # ~180 mm center-to-center
+    # TwinCAT uses axis-aligned bounding box (AABB) collision checking.
+    # Two movers collide if their boxes overlap on BOTH axes simultaneously.
+    # AABB_SIZE = mover edge + TwinCAT's internal safety gap.
+    # We don't know the exact gap, so we add a conservative buffer.
+    TWINCAT_GAP = 10.0                              # estimated internal safety gap (mm)
+    AABB_SIZE = MOVER_SIZE + TWINCAT_GAP            # 123 mm — collision if |dx| < this AND |dy| < this
 
     # Mover centers can't get closer than half a mover width to the glass walls.
     WALL_MARGIN = MOVER_SIZE / 2.0                  # 56.5 mm
@@ -110,7 +111,9 @@ class XPlanarController:
             x=x, y=y, z=z,
         )
 
-    # ── Path planning helpers ────────────────────────────────────────────
+    # ── Path planning (A* grid search) ─────────────────────────────────
+
+    GRID_STEP = 10.0  # mm resolution for A* grid (fine enough for 127mm usable width)
 
     def _clamp_to_workspace(self, x: float, y: float) -> tuple[float, float]:
         """Clamp a point to the safe travel region inside the glass walls."""
@@ -119,109 +122,183 @@ class XPlanarController:
             max(self.Y_MIN, min(self.Y_MAX, y)),
         )
 
-    @staticmethod
-    def _point_to_segment_dist(px: float, py: float,
-                                ax: float, ay: float,
-                                bx: float, by: float) -> float:
-        """Minimum distance from point (px, py) to line segment (a -> b)."""
-        dx, dy = bx - ax, by - ay
-        seg_len_sq = dx * dx + dy * dy
-        if seg_len_sq < 1e-9:
-            # Segment is a point
-            return math.hypot(px - ax, py - ay)
-        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg_len_sq))
-        proj_x = ax + t * dx
-        proj_y = ay + t * dy
-        return math.hypot(px - proj_x, py - proj_y)
+    def _snap_to_grid(self, x: float, y: float) -> tuple[float, float]:
+        """Snap a coordinate to the nearest grid point anchored at workspace boundaries."""
+        # Grid is anchored at (X_MIN, Y_MIN) so boundaries are always valid grid positions
+        gx = self.X_MIN + round((x - self.X_MIN) / self.GRID_STEP) * self.GRID_STEP
+        gy = self.Y_MIN + round((y - self.Y_MIN) / self.GRID_STEP) * self.GRID_STEP
+        return self._clamp_to_workspace(gx, gy)
 
-    def _path_collides(self, start: tuple[float, float], goal: tuple[float, float],
-                       obstacle: tuple[float, float]) -> bool:
-        """Does the straight-line path from start to goal pass within MIN_CLEARANCE of obstacle?"""
-        dist = self._point_to_segment_dist(
-            obstacle[0], obstacle[1],
-            start[0], start[1],
-            goal[0], goal[1],
-        )
-        return dist < self.MIN_CLEARANCE
+    def _grid_neighbors(self, node: tuple[float, float]) -> list[tuple[float, float, float]]:
+        """Return walkable 4-connected neighbors (axis-aligned only) with step cost.
+        Diagonal moves are excluded to avoid TwinCAT's bounding-circle collision
+        checks on diagonal trajectories, which require wider clearance than the
+        workspace allows. Grid is anchored at workspace boundaries."""
+        x, y = node
+        neighbors = []
+        for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+            nx = x + dx * self.GRID_STEP
+            ny = y + dy * self.GRID_STEP
+            # Clamp to boundary (so we can reach X_MIN/X_MAX/Y_MIN/Y_MAX exactly)
+            nx = max(self.X_MIN, min(self.X_MAX, nx))
+            ny = max(self.Y_MIN, min(self.Y_MAX, ny))
+            if (nx, ny) != (x, y):  # avoid self-loops at boundaries
+                step = math.hypot(nx - x, ny - y)
+                neighbors.append((nx, ny, step))
+        return neighbors
+
+    def _is_clear_of_obstacles(self, x: float, y: float,
+                                obstacles: list[tuple[float, float]]) -> bool:
+        """AABB point check: collision if BOTH |dx| < AABB_SIZE and |dy| < AABB_SIZE."""
+        for ox, oy in obstacles:
+            if abs(x - ox) < self.AABB_SIZE and abs(y - oy) < self.AABB_SIZE:
+                return False
+        return True
+
+    def _segment_clears_obstacles(self, a: tuple[float, float], b: tuple[float, float],
+                                   obstacles: list[tuple[float, float]]) -> bool:
+        """
+        AABB swept-segment collision check for axis-aligned moves.
+        For a move from a to b, the swept AABB in the moving axis spans
+        [min, max] of the two endpoints. Collision if the obstacle's AABB
+        overlaps the swept AABB on BOTH axes.
+        Also handles diagonal segments by sampling for safety.
+        """
+        for ox, oy in obstacles:
+            # Swept x range of mover centers
+            x_min = min(a[0], b[0])
+            x_max = max(a[0], b[0])
+            # Swept y range of mover centers
+            y_min = min(a[1], b[1])
+            y_max = max(a[1], b[1])
+
+            # AABB overlap check: does obstacle center fall within AABB_SIZE
+            # of the swept range on BOTH axes?
+            x_overlap = (ox + self.AABB_SIZE > x_min) and (ox - self.AABB_SIZE < x_max)
+            y_overlap = (oy + self.AABB_SIZE > y_min) and (oy - self.AABB_SIZE < y_max)
+
+            if x_overlap and y_overlap:
+                return False
+        return True
+
+    def _astar(self, start: tuple[float, float], goal: tuple[float, float],
+               obstacles: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        """
+        A* search on a grid over the workspace. Returns list of grid waypoints
+        from start to goal (inclusive), or empty list if no path found.
+        """
+        start_g = self._snap_to_grid(*start)
+        goal_g = self._snap_to_grid(*goal)
+
+        # If start or goal is inside an obstacle's clearance zone, we can't plan
+        # (but we still try — the mover is already there)
+
+        open_set = [(0.0, start_g)]
+        came_from = {}
+        g_score = {start_g: 0.0}
+
+        def heuristic(a, b):
+            return math.hypot(a[0] - b[0], a[1] - b[1])
+
+        visited = set()
+
+        while open_set:
+            _, current = heapq.heappop(open_set)
+            if current in visited:
+                continue
+            visited.add(current)
+
+            # Close enough to goal?
+            if math.hypot(current[0] - goal_g[0], current[1] - goal_g[1]) < self.GRID_STEP * 0.5:
+                # Reconstruct path
+                path = [goal_g]
+                node = current
+                while node in came_from:
+                    path.append(node)
+                    node = came_from[node]
+                path.append(start_g)
+                path.reverse()
+                return path
+
+            for nx, ny, step_cost in self._grid_neighbors(current):
+                neighbor = (nx, ny)
+                if neighbor in visited:
+                    continue
+                # Allow goal node even if inside clearance zone (TwinCAT enforces final check)
+                if neighbor != goal_g and not self._is_clear_of_obstacles(nx, ny, obstacles):
+                    continue
+                tentative_g = g_score[current] + step_cost
+                if tentative_g < g_score.get(neighbor, float('inf')):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f = tentative_g + heuristic(neighbor, goal_g)
+                    heapq.heappush(open_set, (f, neighbor))
+
+        print("  A*: no path found!")
+        return []
+
+    def _simplify_path(self, path: list[tuple[float, float]],
+                        obstacles: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        """
+        Reduce a dense grid path to the minimum waypoints needed.
+        Only collapses collinear (axis-aligned) segments to avoid creating
+        diagonal moves, which require wider clearance in TwinCAT.
+        """
+        if len(path) <= 2:
+            return path
+
+        simplified = [path[0]]
+        for i in range(1, len(path) - 1):
+            prev = simplified[-1]
+            nxt = path[i + 1]
+            # Keep this point if direction changes (not collinear)
+            same_x = (prev[0] == path[i][0] == nxt[0])
+            same_y = (prev[1] == path[i][1] == nxt[1])
+            if not (same_x or same_y):
+                simplified.append(path[i])
+        simplified.append(path[-1])
+        return simplified
 
     def _plan_waypoints(self, start: tuple[float, float], goal: tuple[float, float],
-                        obstacle: tuple[float, float]) -> list[tuple[float, float]]:
+                        obstacles: list[tuple[float, float]]) -> list[tuple[float, float]]:
         """
-        If the direct path collides with the obstacle, route around using
-        axis-aligned (L-shaped) waypoints so each leg is purely X or Y
-        motion — no diagonal sweeps past the obstacle.
-
-        Generates candidate routes and picks the first whose every leg
-        clears the obstacle.
-
-        Returns a list of (x, y) waypoints including the final goal.
+        Plan waypoints from start to goal avoiding all obstacles.
+        Uses A* on a grid, then simplifies to minimal straight-line segments.
+        Returns list of waypoints (excluding start, including goal).
         """
-        if not self._path_collides(start, goal, obstacle):
+        # Check if direct path is clear first
+        if self._segment_clears_obstacles(start, goal, obstacles):
             return [goal]
 
-        clearance = self.MIN_CLEARANCE + 20.0  # comfortable margin
+        raw_path = self._astar(start, goal, obstacles)
+        if not raw_path:
+            # Fallback: just try the direct move and let TwinCAT reject if needed
+            print("  No path found, attempting direct move")
+            return [goal]
 
-        # Build candidate L-shaped routes (each is a list of waypoints ending at goal).
-        candidates = []
+        simplified = self._simplify_path(raw_path, obstacles)
 
-        # Option A: Y first, then X — go to (start.x, goal.y) then goal
-        wp_a = self._clamp_to_workspace(start[0], goal[1])
-        candidates.append([wp_a, goal])
+        # Drop the start point (we're already there), keep the rest
+        waypoints = simplified[1:]
 
-        # Option B: X first, then Y — go to (goal.x, start.y) then goal
-        wp_b = self._clamp_to_workspace(goal[0], start[1])
-        candidates.append([wp_b, goal])
+        # Replace last grid-snapped waypoint with exact goal.
+        # If the exact goal differs in both x and y from the prior waypoint,
+        # split into two axis-aligned legs to avoid a diagonal.
+        if waypoints:
+            last_grid = waypoints[-1]
+            waypoints.pop()
+            prev = waypoints[-1] if waypoints else start
+            dx_diff = abs(goal[0] - prev[0]) > 1e-3
+            dy_diff = abs(goal[1] - prev[1]) > 1e-3
+            if dx_diff and dy_diff:
+                # Insert intermediate: match goal's x first, then goal's y
+                waypoints.append((goal[0], prev[1]))
+            waypoints.append(goal)
 
-        # Option C: wide left — x = obstacle.x - clearance, 3-leg route
-        safe_x_left = obstacle[0] - clearance
-        candidates.append([
-            self._clamp_to_workspace(safe_x_left, start[1]),
-            self._clamp_to_workspace(safe_x_left, goal[1]),
-            goal,
-        ])
-
-        # Option D: wide right — x = obstacle.x + clearance, 3-leg route
-        safe_x_right = obstacle[0] + clearance
-        candidates.append([
-            self._clamp_to_workspace(safe_x_right, start[1]),
-            self._clamp_to_workspace(safe_x_right, goal[1]),
-            goal,
-        ])
-
-        def route_is_clear(waypoints):
-            prev = start
-            for wp in waypoints:
-                if self._path_collides(prev, wp, obstacle):
-                    return False
-                prev = wp
-            return True
-
-        def wall_clearance(waypoints):
-            return min(
-                min(p[0] - self.X_MIN, self.X_MAX - p[0],
-                    p[1] - self.Y_MIN, self.Y_MAX - p[1])
-                for p in waypoints
-            )
-
-        valid = [(r, wall_clearance(r)) for r in candidates if route_is_clear(r)]
-
-        if valid:
-            best = max(valid, key=lambda x: x[1])[0]
-        else:
-            # Last resort: go to corner farthest from obstacle, then goal
-            corners = [
-                (self.X_MIN, self.Y_MIN), (self.X_MAX, self.Y_MIN),
-                (self.X_MIN, self.Y_MAX), (self.X_MAX, self.Y_MAX),
-            ]
-            corners.sort(key=lambda c: math.hypot(c[0] - obstacle[0], c[1] - obstacle[1]),
-                         reverse=True)
-            best = [corners[0], goal]
-            print(f"  Warning: corner fallback via ({corners[0][0]:.1f}, {corners[0][1]:.1f})")
-
-        print(f"  Routing around obstacle at ({obstacle[0]:.1f}, {obstacle[1]:.1f}):")
-        for i, wp in enumerate(best):
+        print(f"  A* path ({len(raw_path)} grid nodes -> {len(waypoints)} waypoints):")
+        for i, wp in enumerate(waypoints):
             print(f"    wp {i+1}: ({wp[0]:.1f}, {wp[1]:.1f})")
-        return best
+        return waypoints
 
     # ── Smart move ───────────────────────────────────────────────────────
 
@@ -243,18 +320,12 @@ class XPlanarController:
         print(f"smart_move_to: Mover {mover_id} from ({start[0]:.1f}, {start[1]:.1f}) "
               f"to ({goal[0]:.1f}, {goal[1]:.1f})")
 
-        # Check against every other mover
-        waypoints = [goal]
-        for other_id, other_pos in positions.items():
-            if other_id == mover_id:
-                continue
-            waypoints = self._plan_waypoints(start, goal, other_pos)
-            # For 2 movers this loop runs once; for N movers you'd want
-            # a more sophisticated multi-obstacle planner here.
-            break
+        # Collect all other mover positions as obstacles
+        obstacles = [pos for mid, pos in positions.items() if mid != mover_id]
+        waypoints = self._plan_waypoints(start, goal, obstacles)
 
-        if len(waypoints) == 1 and waypoints[0] == goal:
-            print(f"  Direct path is clear")
+        if len(waypoints) == 1:
+            print(f"  Direct path to goal")
 
         # Execute each leg sequentially
         for i, (wx, wy) in enumerate(waypoints):
@@ -269,7 +340,7 @@ class XPlanarController:
 
         return True
 
-    #Existing move_to (unchanged)
+    # ── Existing move_to (unchanged) ─────────────────────────────────────
 
     def move_to(self, mover_id: int, x: float, y: float, velocity: float = 300.0, accel: float = 2000.0, decel: float = 2000.0, 
                 block: bool = True, timeout: float = 30.0, poll_interval: float = 0.05) -> bool:
@@ -357,7 +428,7 @@ if __name__ == "__main__":
             print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
         # Example: move mover 1 to a target, routing around mover 2 if needed
-        system.smart_move_to(1, 180.0, 56.5, velocity=20)
+        system.smart_move_to(2, 180.0, 400, velocity=30)
 
     finally:
         system.disconnect()
