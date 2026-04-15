@@ -427,7 +427,7 @@ if __name__ == "__main__":
         for m, (px, py) in positions.items():
             print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
-        # Example: move mover 1 to a target, routing around mover 2 if needed
+        #Example: move mover 1 to a target, routing around mover 2 if needed
         system.smart_move_to(2, 180.0, 400, velocity=30)
 
     finally:
