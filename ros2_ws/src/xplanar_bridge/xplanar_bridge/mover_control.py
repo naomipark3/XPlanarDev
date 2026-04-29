@@ -437,7 +437,7 @@ if __name__ == "__main__":
             print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed
-        #system.smart_move_to(2, 56.5, 360.0)
+        system.smart_move_to(2, 56.5, 360.0)
         #system.smart_move_to(2, 180.0, 350.0, velocity=10)
 
     finally:
