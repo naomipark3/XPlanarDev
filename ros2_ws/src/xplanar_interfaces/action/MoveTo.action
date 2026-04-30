@@ -1,0 +1,17 @@
+# Goal
+int32 mover_id
+float64 x          # mm
+float64 y          # mm
+float64 velocity   # mm/s, 0 = use default
+---
+# Result
+bool success
+uint32 error_id    # 0 if success, otherwise TwinCAT error code
+string message
+float64 final_x
+float64 final_y
+---
+# Feedback
+float64 current_x
+float64 current_y
+float64 distance_remaining

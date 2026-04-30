@@ -20,6 +20,14 @@ class MoverStatus:
     y: float
     z: float
 
+@dataclass
+class MoveResult:
+    success: bool
+    error_id: int = 0
+    message: str = ""
+    final_x: float = 0.0
+    final_y: float = 0.0
+
 XPLANAR_ERRORS = {
     33105: "33105: Command not allowed in current mode. System must be initalized and movers must be lifted off the track.",
     33155: "33155: Target position out of bounds",
@@ -312,7 +320,7 @@ class XPlanarController:
 
     def smart_move_to(self, mover_id: int, x: float, y: float,
                       velocity: float = 300.0, accel: float = 2000.0, decel: float = 2000.0,
-                      timeout: float = 30.0) -> bool:
+                      timeout: float = 30.0, on_progress=None) -> MoveResult:
         """
         Move a mover to (x, y), automatically routing around other movers.
         Reads all mover positions, checks for collisions on the straight-line path,
@@ -339,19 +347,19 @@ class XPlanarController:
         for i, (wx, wy) in enumerate(waypoints):
             leg_label = f"leg {i+1}/{len(waypoints)}"
             print(f"  Executing {leg_label}: -> ({wx:.1f}, {wy:.1f})")
-            ok = self.move_to(mover_id, wx, wy,
+            result = self.move_to(mover_id, wx, wy,
                               velocity=velocity, accel=accel, decel=decel,
-                              block=True, timeout=timeout)
-            if not ok:
+                              block=True, timeout=timeout, on_progress=on_progress)
+            if not result.success:
                 print(f"  {leg_label} FAILED — aborting smart_move_to")
-                return False
+                return result
 
-        return True
+        return MoveResult(True, 0, "", waypoints[-1][0], waypoints[-1][1])
 
     #Existing move_to (unchanged)
 
     def move_to(self, mover_id: int, x: float, y: float, velocity: float = 300.0, accel: float = 2000.0, decel: float = 2000.0, 
-                block: bool = True, timeout: float = 30.0, poll_interval: float = 0.05) -> bool:
+                block: bool = True, timeout: float = 30.0, poll_interval: float = 0.05, on_progress = None) -> MoveResult:
         """
         Command a mover to an (x, y) position.
         Args:
@@ -362,8 +370,7 @@ class XPlanarController:
         - poll_interval: seconds between status polls
 
         Returns:
-        True if move completed successfully (or if non-blocking),
-        False if error or timeout.
+        MoveResult with success flag, error_id, message, and final position.
         """
         prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
 
@@ -373,7 +380,7 @@ class XPlanarController:
             print(f"Mover {mover_id} is busy, waiting...")
             if not self._wait_not_busy(mover_id, timeout):
                 print(f"Mover {mover_id} still busy after {timeout}s")
-                return False
+                return MoveResult(False, 0, f"Mover {mover_id} still busy after {timeout}s")
 
         #Write target and trigger
         self.plc.write_by_name(f"{prefix}.fTargetX", x, pyads.PLCTYPE_LREAL)
@@ -385,29 +392,31 @@ class XPlanarController:
         print(f"Mover {mover_id} -> ({x:.1f}, {y:.1f})")
 
         if not block:
-            return True
+            return MoveResult(True)
 
         #Wait for completion
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             status = self.get_cmd_status(mover_id)
             print(f"  Mover {mover_id}: ({status.x:.1f}, {status.y:.1f}, {status.z:.1f})")
+            if on_progress is not None:
+                on_progress(status)
             if status.done:
                 self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} arrived at ({status.x:.1f}, {status.y:.1f})")
-                return True
+                return MoveResult(True, 0, "", status.x, status.y)
             if status.error:
                 error_id = self.plc.read_by_name(f"{prefix}.nErrorID", pyads.PLCTYPE_UDINT)
                 msg = XPLANAR_ERRORS.get(error_id, f"Unknown error {error_id}")
                 self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} rejected: {msg}")
-                return False
+                return MoveResult(False, error_id, msg, status.x, status.y)
             time.sleep(poll_interval)
 
         #Timeout
         self.plc.write_by_name(f"{prefix}.bExecute", False, pyads.PLCTYPE_BOOL)
         print(f"Mover {mover_id} TIMEOUT after {timeout}s")
-        return False
+        return MoveResult(False, 0, f"Move TIMEOUT after {timeout}s", status.x, status.y)
 
     def _wait_not_busy(self, mover_id: int, timeout: float) -> bool:
         '''Polls bBusy every 50 ms until the mover is no longer busy (returns True) 
@@ -437,7 +446,7 @@ if __name__ == "__main__":
             print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed
-        system.smart_move_to(2, 56.5, 360.0)
+        #system.smart_move_to(2, 56.5, 360.0)
         #system.smart_move_to(2, 180.0, 350.0, velocity=10)
 
     finally:
