@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer
 from geometry_msgs.msg import PoseStamped
+from std_srvs.srv import Trigger
 from xplanar_interfaces.action import MoveTo
 from .mover_control import XPlanarController
 
@@ -23,13 +24,31 @@ class XPlanarBridge(Node):
         }
         self.timer = self.create_timer(0.1, self.publish_states)  #10 Hz
 
+        self._init_service = self.create_service(
+            Trigger, 'initialize', self.handle_initialize
+        )
+
         self._move_server = ActionServer(
             self,
             MoveTo,
             'move_to',
             execute_callback=self.execute_move,
         )
+        self.get_logger().info("Service '/initialize' ready")
         self.get_logger().info("Action server 'move_to' ready")
+
+    def handle_initialize(self, request, response):
+        self.get_logger().info("Initialize requested (will take ~13s)")
+        try:
+            self.ctrl.initialize()
+            response.success = True
+            response.message = "System initialized, movers lifted"
+            self.get_logger().info(response.message)
+        except Exception as e:
+            response.success = False
+            response.message = f"Initialize failed: {e}"
+            self.get_logger().error(response.message)
+        return response
 
     def publish_states(self):
         for mid, (x, y) in self.ctrl.get_all_mover_positions().items():
