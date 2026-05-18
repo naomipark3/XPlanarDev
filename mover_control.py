@@ -429,6 +429,58 @@ class XPlanarController:
                 return True
             time.sleep(0.05)
         return False
+    
+
+    def tilt_to(self, mover_id: int, angle: float, axis: str = "A",
+                velocity: float = 0.5, accel: float = 5.0, decel: float = 5.0,
+                block: bool = True, timeout: float = 10.0,
+                poll_interval: float = 0.05) -> MoveResult:
+        """
+        Tilt a mover about axis A or B to `angle` (radians).
+        axis: "A" or "B".
+        """
+        prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
+
+        # Check not already tilting
+        if self.plc.read_by_name(f"{prefix}.bTiltBusy", pyads.PLCTYPE_BOOL):
+            print(f"Mover {mover_id} tilt is busy, aborting")
+            return MoveResult(False, 0, f"Mover {mover_id} tilt busy")
+
+        # eTiltAxis: TILT_AXIS_A = 0, TILT_AXIS_B = 1 (from the enum)
+        axis_val = 0 if axis.upper() == "A" else 1
+
+        # Write target + dynamics + axis, then trigger
+        self.plc.write_by_name(f"{prefix}.fTargetTilt",   angle,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltVelocity", velocity, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltAccel",    accel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltDecel",    decel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.eTiltAxis",     axis_val, pyads.PLCTYPE_INT)
+        self.plc.write_by_name(f"{prefix}.bExecuteTilt",  True,     pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} tilt {axis} -> {angle:.4f} rad")
+
+        if not block:
+            return MoveResult(True)
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            done  = self.plc.read_by_name(f"{prefix}.bTiltDone",  pyads.PLCTYPE_BOOL)
+            error = self.plc.read_by_name(f"{prefix}.bTiltError", pyads.PLCTYPE_BOOL)
+            print("tilting in progress...")
+            if done:
+                self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} tilt complete")
+                return MoveResult(True)
+            if error:
+                error_id = self.plc.read_by_name(f"{prefix}.nTiltErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown tilt error {error_id}")
+                self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} tilt rejected: {msg}")
+                return MoveResult(False, error_id, msg)
+            time.sleep(poll_interval)
+
+        self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} tilt TIMEOUT after {timeout}s")
+        return MoveResult(False, 0, f"Tilt TIMEOUT after {timeout}s")
 
 
 if __name__ == "__main__":
@@ -441,13 +493,17 @@ if __name__ == "__main__":
     #system.initialize()
 
     try:
-        positions = system.get_all_mover_positions()
-        for m, (px, py) in positions.items():
-            print(f"Mover {m} at ({px:.1f}, {py:.1f})")
+        # positions = system.get_all_mover_positions()
+        # for m, (px, py) in positions.items():
+        #     print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed
         #system.smart_move_to(2, 56.5, 360.0)
         #system.smart_move_to(2, 180.0, 350.0, velocity=10)
-
+        # Tiny tilt test on stationary mover — ~1° about A axis
+        a_before = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
+        system.tilt_to(1, 0.0, axis="B")
+        a_after = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
+        print(f"A before: {a_before:.4f}, after: {a_after:.4f}")
     finally:
         system.disconnect()
