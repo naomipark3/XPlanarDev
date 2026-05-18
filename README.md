@@ -24,23 +24,42 @@ Key ROS components (in XPlanar_Development\ros2_ws\src\):
 The ROS 2 interface is implemented by the XPlanarBridge node (in xplanar_bridge/bridge_node.py), which wraps the XPlanarController and exposes it to the ROS ecosystem. A timer-driven publisher runs at 10 Hz to stream each mover's pose (PoseStamped) on topics like mover_i/pose, providing continuous state feedback. A Trigger service (/initialize) allows external nodes to initialize the system (lift the movers off the track so they are in a state to accept commands), while an action server (move_to) handles motion requests and enables asynchronous goal execution with real-time feedback (i.e. current position and remaning distance) and a final success or failure result. The action server calls smart_move_to, which bridges high-level ROS commands to low-level ADS-based control on the PLC. 
 
 ## Running the ROS 2 Interface
+## Running the XPlanar ROS 2 Bridge
+
 Navigate to the ROS 2 workspace:
+
 ```bash
 cd ~/Desktop/XPlanarDev/ros2_ws
+```
 
 Compile the ROS package:
+
+```bash
 colcon build --packages-select xplanar_bridge --symlink-install
+```
 
 Add the compiled ROS package to the current shell environment:
+
+```bash
 source install/setup.bash
+```
 
 Launch the bridge node:
+
+```bash
 ros2 run xplanar_bridge bridge_node
+```
 
 Initialize the movers/ADS connection (lift movers off the track):
+
+```bash
 ros2 service call /initialize std_srvs/srv/Trigger
+```
 
 Send a closed-loop navigation command:
+
+```bash
 ros2 action send_goal --feedback /move_to xplanar_interfaces/action/MoveTo "{mover_id: 1, x: 56.5, y: 120.0, velocity: 10.0}"
+```
 
 The action server continuously streams feedback during execution, including the mover’s current position and remaining distance to the goal.
