@@ -100,12 +100,15 @@ class XPlanarController:
         z = self.plc.read_by_name(f"{prefix}.fPosZ", pyads.PLCTYPE_LREAL)
         return x, y, z
 
-    def get_all_mover_positions(self) -> dict[int, tuple[float, float]]:
-        """Read (x, y) positions of all movers. Returns {mover_id: (x, y)}."""
+    def get_all_mover_positions(self) -> dict[int, tuple[float, float, float, float, float, float]]:
+        """Read (x, y, z, a, b, c) positions of all movers. Returns {mover_id: (x, y, z, a, b, c)}."""
         positions = {}
         for m in range(1, self.NUM_MOVERS + 1):
-            x, y, _ = self.get_mover_position(m)
-            positions[m] = (x, y)
+            prefix = f"GVL_Movers.aMovers[{m}]"
+            positions[m] = tuple(
+                self.plc.read_by_name(f"{prefix}.{f}", pyads.PLCTYPE_LREAL)
+                for f in ("fPosX", "fPosY", "fPosZ", "fPosA", "fPosB", "fPosC")
+            )
         return positions
 
     def get_cmd_status(self, mover_id: int) -> MoverStatus:
@@ -330,14 +333,14 @@ class XPlanarController:
 
         #read current mover positions
         positions = self.get_all_mover_positions()
-        start = positions[mover_id]
+        start = positions[mover_id][:2] 
         goal = (x, y)
 
         print(f"smart_move_to: Mover {mover_id} from ({start[0]:.1f}, {start[1]:.1f}) "
               f"to ({goal[0]:.1f}, {goal[1]:.1f})")
 
         #Collect all other mover positions as obstacles (build an obstacle list from the other movers)
-        obstacles = [pos for mid, pos in positions.items() if mid != mover_id]
+        obstacles = [pos[:2] for mid, pos in positions.items() if mid != mover_id]
         waypoints = self._plan_waypoints(start, goal, obstacles) #call planner to get waypoints
 
         if len(waypoints) == 1:
@@ -433,7 +436,7 @@ class XPlanarController:
     def tilt_to(self, mover_id: int, angle: float, axis: str = "A",
                 velocity: float = 0.5, accel: float = 5.0, decel: float = 5.0,
                 block: bool = True, timeout: float = 10.0,
-                poll_interval: float = 0.05) -> MoveResult:
+                poll_interval: float = 0.05, on_progress=None) -> MoveResult:
         """
         Tilt a mover about axis A or B to `angle` (radians).
         axis: "A" or "B".
@@ -475,6 +478,13 @@ class XPlanarController:
                 self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} tilt rejected: {msg}")
                 return MoveResult(False, error_id, msg)
+            if on_progress is not None:
+                #read current angle for feedback
+                angle_field = "fPosA" if axis.upper() == "A" else "fPosB"
+                current = self.plc.read_by_name(
+                    f"GVL_Movers.aMovers[{mover_id}].{angle_field}", pyads.PLCTYPE_LREAL
+                )
+                on_progress(current)
             time.sleep(poll_interval)
 
         self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
@@ -484,7 +494,7 @@ class XPlanarController:
     def rotate_to(self, mover_id: int, angle: float, additional_turns: int = 0,
               velocity: float = 30.0, accel: float = 10.0, decel: float = 10.0,
               block: bool = True, timeout: float = 45.0,
-              poll_interval: float = 0.05) -> MoveResult:
+              poll_interval: float = 0.05, on_progress=None) -> MoveResult:
         """
         Rotate a mover about its Z axis to `angle` (radians).
         additional_turns: extra full rotations before stopping at angle (0 = shortest path).
@@ -521,6 +531,14 @@ class XPlanarController:
                 self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
                 print(f"Mover {mover_id} rotation rejected: {msg}")
                 return MoveResult(False, error_id, msg)
+            
+            if on_progress is not None:
+                # read current angle for feedback
+                angle_field = "fPosC"
+                current = self.plc.read_by_name(
+                    f"GVL_Movers.aMovers[{mover_id}].{angle_field}", pyads.PLCTYPE_LREAL
+                )
+                on_progress(current)
             time.sleep(poll_interval)
 
         self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
@@ -539,7 +557,8 @@ if __name__ == "__main__":
 
     try:
         positions = system.get_all_mover_positions()
-        for m, (px, py) in positions.items():
+        for m, pose in positions.items():
+            px, py = pose[0], pose[1]
             print(f"Mover {m} at ({px:.1f}, {py:.1f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed

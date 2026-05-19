@@ -1,0 +1,14 @@
+# Goal
+int32 mover_id
+float64 angle          # radians
+string axis            #A or B, can move either pos or neg
+float64 velocity       # rad/s, 0 = use default
+---
+# Result
+bool success
+uint32 error_id
+string message
+float64 final_angle
+---
+# Feedback
+float64 current_angle

@@ -46,7 +46,13 @@ source install/setup.bash
 Launch the bridge node:
 
 ```bash
-ros2 run xplanar_bridge bridge_node
+ros2 run xplanar_bridge bridge
+```
+
+See the current mover state (6-DoF):
+
+```bash
+ros2 topic echo /mover_1/pose
 ```
 
 Initialize the movers/ADS connection (lift movers off the track):

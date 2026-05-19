@@ -3,8 +3,10 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger
-from xplanar_interfaces.action import MoveTo
+from xplanar_interfaces.action import MoveTo, TiltTo, RotateTo
 from .mover_control import XPlanarController
+from geometry_msgs.msg import PoseStamped, Quaternion
+import math
 
 
 class XPlanarBridge(Node):
@@ -34,8 +36,17 @@ class XPlanarBridge(Node):
             'move_to',
             execute_callback=self.execute_move,
         )
+
+        self._tilt_server = ActionServer(
+            self, TiltTo, 'tilt_to', execute_callback=self.execute_tilt,
+        )
+        self._rotate_server = ActionServer(
+            self, RotateTo, 'rotate_to', execute_callback=self.execute_rotate,
+        )
+        
         self.get_logger().info("Service '/initialize' ready")
         self.get_logger().info("Action server 'move_to' ready")
+        self.get_logger().info("Action servers 'tilt_to' and 'rotate_to' ready")
 
     def handle_initialize(self, request, response):
         self.get_logger().info("Initialize requested (will take ~13s)")
@@ -51,13 +62,28 @@ class XPlanarBridge(Node):
         return response
 
     def publish_states(self):
-        for mid, (x, y) in self.ctrl.get_all_mover_positions().items():
+        for mid, pose in self.ctrl.get_all_mover_positions().items():
+            x, y, z, a, b, c = pose
             msg = PoseStamped()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'xplanar'
-            msg.pose.position.x = x / 1000.0  #**convert mm -> m, as this is standard ROS convention
+            msg.pose.position.x = x / 1000.0
             msg.pose.position.y = y / 1000.0
+            msg.pose.position.z = z / 1000.0
+            msg.pose.orientation = self._rpy_to_quat(a, b, c)
             self.pubs[mid].publish(msg)
+
+    @staticmethod
+    def _rpy_to_quat(roll, pitch, yaw):
+        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+        q = Quaternion()
+        q.w = cr * cp * cy + sr * sp * sy
+        q.x = sr * cp * cy - cr * sp * sy
+        q.y = cr * sp * cy + sr * cp * sy
+        q.z = cr * cp * sy - sr * sp * cy
+        return q
 
     def execute_move(self, goal_handle):
         g = goal_handle.request
@@ -97,6 +123,68 @@ class XPlanarBridge(Node):
         ''''This should be called upon ctrl+c for safe exiting'''
         self.ctrl.disconnect()
         super().destroy_node()
+
+    def execute_tilt(self, goal_handle):
+        g = goal_handle.request
+        self.get_logger().info(
+            f"Tilt request: mover {g.mover_id} axis {g.axis} -> {g.angle:.4f} rad"
+        )
+        velocity = g.velocity if g.velocity > 0 else 0.5
+
+        def on_progress(current_angle):
+            fb = TiltTo.Feedback()
+            fb.current_angle = current_angle
+            goal_handle.publish_feedback(fb)
+
+        result_data = self.ctrl.tilt_to(
+            g.mover_id, g.angle, axis=g.axis,
+            velocity=velocity, on_progress=on_progress,
+        )
+
+        result = TiltTo.Result()
+        result.success = result_data.success
+        result.error_id = result_data.error_id
+        result.message = result_data.message
+
+        # read final angle from the appropriate axis
+        pose = self.ctrl.get_all_mover_positions()[g.mover_id]
+        result.final_angle = pose[3] if g.axis.upper() == "A" else pose[4]
+
+        if result_data.success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
+
+    def execute_rotate(self, goal_handle):
+        g = goal_handle.request
+        self.get_logger().info(
+            f"Rotate request: mover {g.mover_id} -> {g.angle:.4f} rad "
+            f"(+{g.additional_turns} turns)"
+        )
+        velocity = g.velocity if g.velocity > 0 else 1.0
+
+        def on_progress(current_angle):
+            fb = RotateTo.Feedback()
+            fb.current_angle = current_angle
+            goal_handle.publish_feedback(fb)
+
+        result_data = self.ctrl.rotate_to(
+            g.mover_id, g.angle, additional_turns=g.additional_turns,
+            velocity=velocity, on_progress=on_progress,
+        )
+
+        result = RotateTo.Result()
+        result.success = result_data.success
+        result.error_id = result_data.error_id
+        result.message = result_data.message
+        result.final_angle = self.ctrl.get_all_mover_positions()[g.mover_id][5]
+
+        if result_data.success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
 
 
 def main():
