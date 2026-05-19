@@ -481,6 +481,52 @@ class XPlanarController:
         self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
         print(f"Mover {mover_id} tilt TIMEOUT after {timeout}s")
         return MoveResult(False, 0, f"Tilt TIMEOUT after {timeout}s")
+    
+    def rotate_to(self, mover_id: int, angle: float, additional_turns: int = 0,
+              velocity: float = 30.0, accel: float = 10.0, decel: float = 10.0,
+              block: bool = True, timeout: float = 45.0,
+              poll_interval: float = 0.05) -> MoveResult:
+        """
+        Rotate a mover about its Z axis to `angle` (radians).
+        additional_turns: extra full rotations before stopping at angle (0 = shortest path).
+        """
+        prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
+
+        if self.plc.read_by_name(f"{prefix}.bRotBusy", pyads.PLCTYPE_BOOL):
+            print(f"Mover {mover_id} rotation is busy, aborting")
+            return MoveResult(False, 0, f"Mover {mover_id} rotation busy")
+
+        self.plc.write_by_name(f"{prefix}.fTargetRotation",  angle,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotVelocity",     velocity,         pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotAccel",        accel,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotDecel",        decel,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.nAdditionalTurns", additional_turns, pyads.PLCTYPE_DINT)
+        self.plc.write_by_name(f"{prefix}.bExecuteRotation", True,             pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} rotate -> {angle:.4f} rad (+{additional_turns} turns)")
+
+        if not block:
+            return MoveResult(True)
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            print("Rotating in progress...")
+            done  = self.plc.read_by_name(f"{prefix}.bRotDone",  pyads.PLCTYPE_BOOL)
+            error = self.plc.read_by_name(f"{prefix}.bRotError", pyads.PLCTYPE_BOOL)
+            if done:
+                self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} rotation complete")
+                return MoveResult(True)
+            if error:
+                error_id = self.plc.read_by_name(f"{prefix}.nRotErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown rotation error {error_id}")
+                self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} rotation rejected: {msg}")
+                return MoveResult(False, error_id, msg)
+            time.sleep(poll_interval)
+
+        self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} rotation TIMEOUT after {timeout}s")
+        return MoveResult(False, 0, f"Rotation TIMEOUT after {timeout}s")
 
 
 if __name__ == "__main__":
@@ -500,10 +546,15 @@ if __name__ == "__main__":
         #Example: move mover 1 to a target, routing around mover 2 if needed
         #system.smart_move_to(2, 56.5, 360.0)
         #system.smart_move_to(2, 180.0, 350.0, velocity=10)
+
         # Tiny tilt test on stationary mover — ~1° about A axis
-        a_before = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
-        system.tilt_to(1, 0.0, axis="B")
-        a_after = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
-        print(f"A before: {a_before:.4f}, after: {a_after:.4f}")
+        # a_before = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
+        # system.tilt_to(1, 0.0, axis="B")
+        # a_after = system.plc.read_by_name("GVL_Movers.aMovers[1].fPosB", pyads.PLCTYPE_LREAL)
+        # print(f"A before: {a_before:.4f}, after: {a_after:.4f}")
+
+        system.rotate_to(1, math.pi*30)
+        time.sleep(1.0)
+        system.rotate_to(1, 0.0)           # back to neutral
     finally:
         system.disconnect()
