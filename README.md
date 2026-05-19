@@ -5,7 +5,7 @@ The code in this repository follows the architecture shown in the diagram below,
 1. Python Interface
 Key Python Components
 
-xplanar_bridge/xplanar_bridge/mover_control.py: Core control logic (XPlanarController), including ADS communication, move_to, smart_move_to, tilt_to, and rotate_to (*We focus specifically on the code in mover_control.py for this project).
+xplanar_bridge/xplanar_bridge/mover_control.py: Core control logic (XPlanarController), including ADS communication, move_to, smart_move_to, tilt_to, and rotate_to (Note: we focus specifically on the code in mover_control.py for this project).
 control_ui.py: User-facing interface for sending commands and interacting with the system
 read_mover_data.py: Utility for reading and monitoring real-time mover state from the PLC
 setup_ads_route.py: Script to configure the ADS route between the PC and Beckhoff IPC for a Linux-based machine
