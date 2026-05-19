@@ -429,6 +429,103 @@ class XPlanarController:
                 return True
             time.sleep(0.05)
         return False
+    
+    def tilt_to(self, mover_id: int, angle: float, axis: str = "A",
+                velocity: float = 0.5, accel: float = 5.0, decel: float = 5.0,
+                block: bool = True, timeout: float = 10.0,
+                poll_interval: float = 0.05) -> MoveResult:
+        """
+        Tilt a mover about axis A or B to `angle` (radians).
+        axis: "A" or "B".
+        """
+        prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
+
+        # Check not already tilting
+        if self.plc.read_by_name(f"{prefix}.bTiltBusy", pyads.PLCTYPE_BOOL):
+            print(f"Mover {mover_id} tilt is busy, aborting")
+            return MoveResult(False, 0, f"Mover {mover_id} tilt busy")
+
+        # eTiltAxis: TILT_AXIS_A = 0, TILT_AXIS_B = 1 (from the enum)
+        axis_val = 0 if axis.upper() == "A" else 1
+
+        # Write target + dynamics + axis, then trigger
+        self.plc.write_by_name(f"{prefix}.fTargetTilt",   angle,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltVelocity", velocity, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltAccel",    accel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fTiltDecel",    decel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.eTiltAxis",     axis_val, pyads.PLCTYPE_INT)
+        self.plc.write_by_name(f"{prefix}.bExecuteTilt",  True,     pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} tilt {axis} -> {angle:.4f} rad")
+
+        if not block:
+            return MoveResult(True)
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            done  = self.plc.read_by_name(f"{prefix}.bTiltDone",  pyads.PLCTYPE_BOOL)
+            error = self.plc.read_by_name(f"{prefix}.bTiltError", pyads.PLCTYPE_BOOL)
+            print("tilting in progress...")
+            if done:
+                self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} tilt complete")
+                return MoveResult(True)
+            if error:
+                error_id = self.plc.read_by_name(f"{prefix}.nTiltErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown tilt error {error_id}")
+                self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} tilt rejected: {msg}")
+                return MoveResult(False, error_id, msg)
+            time.sleep(poll_interval)
+
+        self.plc.write_by_name(f"{prefix}.bExecuteTilt", False, pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} tilt TIMEOUT after {timeout}s")
+        return MoveResult(False, 0, f"Tilt TIMEOUT after {timeout}s")
+    
+    def rotate_to(self, mover_id: int, angle: float, additional_turns: int = 0,
+              velocity: float = 30.0, accel: float = 10.0, decel: float = 10.0,
+              block: bool = True, timeout: float = 45.0,
+              poll_interval: float = 0.05) -> MoveResult:
+        """
+        Rotate a mover about its Z axis to `angle` (radians).
+        additional_turns: extra full rotations before stopping at angle (0 = shortest path).
+        """
+        prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
+
+        if self.plc.read_by_name(f"{prefix}.bRotBusy", pyads.PLCTYPE_BOOL):
+            print(f"Mover {mover_id} rotation is busy, aborting")
+            return MoveResult(False, 0, f"Mover {mover_id} rotation busy")
+
+        self.plc.write_by_name(f"{prefix}.fTargetRotation",  angle,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotVelocity",     velocity,         pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotAccel",        accel,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fRotDecel",        decel,            pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.nAdditionalTurns", additional_turns, pyads.PLCTYPE_DINT)
+        self.plc.write_by_name(f"{prefix}.bExecuteRotation", True,             pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} rotate -> {angle:.4f} rad (+{additional_turns} turns)")
+
+        if not block:
+            return MoveResult(True)
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            print("Rotating in progress...")
+            done  = self.plc.read_by_name(f"{prefix}.bRotDone",  pyads.PLCTYPE_BOOL)
+            error = self.plc.read_by_name(f"{prefix}.bRotError", pyads.PLCTYPE_BOOL)
+            if done:
+                self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} rotation complete")
+                return MoveResult(True)
+            if error:
+                error_id = self.plc.read_by_name(f"{prefix}.nRotErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown rotation error {error_id}")
+                self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} rotation rejected: {msg}")
+                return MoveResult(False, error_id, msg)
+            time.sleep(poll_interval)
+
+        self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} rotation TIMEOUT after {timeout}s")
+        return MoveResult(False, 0, f"Rotation TIMEOUT after {timeout}s")
 
 
 if __name__ == "__main__":
