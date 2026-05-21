@@ -2,8 +2,9 @@ The code in this repository follows the architecture shown in the diagram below,
 
 ![Architecture Diagram](Architecture_diagram.drawio.png)
 
-1. Python Interface
-Key Python Components
+## Python Interface
+
+### Key Components
 
 xplanar_bridge/xplanar_bridge/mover_control.py: Core control logic (XPlanarController), including ADS communication, move_to, smart_move_to, tilt_to, and rotate_to (Note: we focus specifically on the code in mover_control.py for this project).
 control_ui.py: User-facing interface for sending commands and interacting with the system
@@ -13,8 +14,10 @@ This project establishes closed-loop control of Beckhoff XPlanar movers using Py
 The smart_move_to function in mover_control.py extends basic position control by adding navigation between movers. It first reads the current positions of all movers and treats the others as dynamic obstacles using a conservative AABB-based clearance model that matches TwinCAT's internal collision checks. If a direct path to the goal is not safe, it runs an A* search on a discretized workspace grid to generate a collision-free path, then simplifies this into a minimal set of axis-aligned waypoints (i.e. staircasing). Each segment is executed sequentially using the existing move_to closed-loop routine. This ensures safe, stepwise motion while continuously relying on PLC feedback for execution validation.
 In addition to planar motion, mover_control.py also exposes tilt_to and rotate_to functions for commanding mover orientation. The tilt_to function tilts a mover about either its A or B axis (single-axis tilt) by writing target angle and dynamics values to dedicated tilt fields in GVL_Cmd.aMoverCmd and polling the PLC for completion in the same closed-loop pattern as move_to. The rotate_to function rotates a mover about its C axis (yaw) to a target angle, with an optional additional_turns parameter for commanding extra full rotations before settling at the final angle. Both functions rely on the same PLC-side cyclic logic that mirrors the move command pattern: write target + dynamics, set bExecute, monitor bBusy/bDone/bError, then auto-reset on completion.
 
-2. ROS2 Interface
-Key ROS components (in XPlanar_Development\ros2_ws\src\):
+## ROS 2 Interface
+
+### Key ROS Components (in XPlanar_Development\ros2_ws\src\):
+
 xplanar_bridge.py: Main ROS node (publishes state, exposes service + action servers)
 mover_control.py: Python controller handling ADS communication and motion logic
 MoveTo.action: Defines the action interface for motion goals, feedback, and results
