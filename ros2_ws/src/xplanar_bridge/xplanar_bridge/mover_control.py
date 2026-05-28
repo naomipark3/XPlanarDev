@@ -544,6 +544,62 @@ class XPlanarController:
         self.plc.write_by_name(f"{prefix}.bExecuteRotation", False, pyads.PLCTYPE_BOOL)
         print(f"Mover {mover_id} rotation TIMEOUT after {timeout}s")
         return MoveResult(False, 0, f"Rotation TIMEOUT after {timeout}s")
+    
+
+    def move_z(self, mover_id: int, z: float,
+            velocity: float = 50.0, accel: float = 500.0, decel: float = 500.0,
+            block: bool = True, timeout: float = 10.0,
+            poll_interval: float = 0.05, on_progress=None) -> MoveResult:
+        """
+        Move a mover vertically to `z` (mm above the track surface).
+        Z motion shares Dynamics.Movement with XY on the PLC side, so issuing a
+        move_z command will overwrite the velocity/accel/decel values for any
+        subsequent XY command until rewritten.
+        """
+        prefix = f"GVL_Cmd.aMoverCmd[{mover_id}]"
+
+        # Check not already moving vertically
+        if self.plc.read_by_name(f"{prefix}.bZBusy", pyads.PLCTYPE_BOOL):
+            print(f"Mover {mover_id} Z move is busy, aborting")
+            return MoveResult(False, 0, f"Mover {mover_id} Z busy")
+
+        # Write target + dynamics (shared with XY), then trigger
+        self.plc.write_by_name(f"{prefix}.fTargetZ",  z,        pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fVelocity", velocity, pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fAccel",    accel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.fDecel",    decel,    pyads.PLCTYPE_LREAL)
+        self.plc.write_by_name(f"{prefix}.bExecuteZ", True,     pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} Z -> {z:.4f} mm")
+
+        if not block:
+            return MoveResult(True)
+
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            print("Z move in progress...")
+            done  = self.plc.read_by_name(f"{prefix}.bZDone",  pyads.PLCTYPE_BOOL)
+            error = self.plc.read_by_name(f"{prefix}.bZError", pyads.PLCTYPE_BOOL)
+            if done:
+                self.plc.write_by_name(f"{prefix}.bExecuteZ", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} Z move complete")
+                return MoveResult(True)
+            if error:
+                error_id = self.plc.read_by_name(f"{prefix}.nZErrorID", pyads.PLCTYPE_UDINT)
+                msg = XPLANAR_ERRORS.get(error_id, f"Unknown Z error {error_id}")
+                self.plc.write_by_name(f"{prefix}.bExecuteZ", False, pyads.PLCTYPE_BOOL)
+                print(f"Mover {mover_id} Z move rejected: {msg}")
+                return MoveResult(False, error_id, msg)
+
+            if on_progress is not None:
+                current = self.plc.read_by_name(
+                    f"GVL_Movers.aMovers[{mover_id}].fPosZ", pyads.PLCTYPE_LREAL
+                )
+                on_progress(current)
+            time.sleep(poll_interval)
+
+        self.plc.write_by_name(f"{prefix}.bExecuteZ", False, pyads.PLCTYPE_BOOL)
+        print(f"Mover {mover_id} Z move TIMEOUT after {timeout}s")
+        return MoveResult(False, 0, f"Z move TIMEOUT after {timeout}s")
 
 
 if __name__ == "__main__":
@@ -558,12 +614,15 @@ if __name__ == "__main__":
     try:
         positions = system.get_all_mover_positions()
         for m, pose in positions.items():
-            px, py = pose[0], pose[1]
-            print(f"Mover {m} at ({px:.1f}, {py:.1f})")
+            px, py, pz = pose[0], pose[1], pose[2]
+            print(f"Mover {m} at ({px:.1f}, {py:.1f}, {pz:.3f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed
-        #system.smart_move_to(2, 56.5, 360.0)
+        #system.rotate_to(2, -5*math.pi/2)
+        #system.smart_move_to(2, 152.8, 312.0)
         #system.smart_move_to(2, 180.0, 350.0, velocity=10)
+        #system.tilt_to(1, 0.0, axis="A")
+        system.move_z(1, 2.0) 
 
     finally:
         system.disconnect()
