@@ -3,7 +3,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger
-from xplanar_interfaces.action import MoveTo, TiltTo, RotateTo
+from xplanar_interfaces.action import MoveTo, TiltTo, RotateTo, MoveZ
 from .mover_control import XPlanarController
 from geometry_msgs.msg import PoseStamped, Quaternion
 import math
@@ -43,10 +43,14 @@ class XPlanarBridge(Node):
         self._rotate_server = ActionServer(
             self, RotateTo, 'rotate_to', execute_callback=self.execute_rotate,
         )
+        self._z_server = ActionServer(
+            self, MoveZ, 'move_z', execute_callback=self.execute_move_z,
+        )
         
         self.get_logger().info("Service '/initialize' ready")
         self.get_logger().info("Action server 'move_to' ready")
         self.get_logger().info("Action servers 'tilt_to' and 'rotate_to' ready")
+        self.get_logger().info("Action server 'move_z' ready")
 
     def handle_initialize(self, request, response):
         self.get_logger().info("Initialize requested (will take ~13s)")
@@ -179,6 +183,35 @@ class XPlanarBridge(Node):
         result.error_id = result_data.error_id
         result.message = result_data.message
         result.final_angle = self.ctrl.get_all_mover_positions()[g.mover_id][5]
+
+        if result_data.success:
+            goal_handle.succeed()
+        else:
+            goal_handle.abort()
+        return result
+
+    def execute_move_z(self, goal_handle):
+        g = goal_handle.request
+        self.get_logger().info(
+            f"Z move request: mover {g.mover_id} -> {g.z:.4f} mm"
+        )
+        velocity = g.velocity if g.velocity > 0 else 50.0
+
+        def on_progress(current_z):
+            fb = MoveZ.Feedback()
+            fb.current_z = current_z
+            goal_handle.publish_feedback(fb)
+
+        result_data = self.ctrl.move_z(
+            g.mover_id, g.z,
+            velocity=velocity, on_progress=on_progress,
+        )
+
+        result = MoveZ.Result()
+        result.success = result_data.success
+        result.error_id = result_data.error_id
+        result.message = result_data.message
+        result.final_z = self.ctrl.get_all_mover_positions()[g.mover_id][2]
 
         if result_data.success:
             goal_handle.succeed()

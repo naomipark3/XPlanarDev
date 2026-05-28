@@ -28,6 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/MoveTo.action"
   "action/TiltTo.action"
   "action/RotateTo.action"
+  "action/MoveZ.action"
   DEPENDENCIES action_msgs
 )
 
