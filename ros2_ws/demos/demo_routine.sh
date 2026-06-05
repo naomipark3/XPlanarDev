@@ -81,20 +81,6 @@ ros2 action send_goal /move_to xplanar_interfaces/action/MoveTo \
 #sleep 0.5
 sleep 0.5
 
-#rotate_to(2, -6*math.pi/2). This is typically where the script will fail and "setpoint is unreachable"
-ros2 action send_goal /rotate_to xplanar_interfaces/action/RotateTo \
-  "{mover_id: 2, angle: -9.42477796076938, additional_turns: 0, velocity: 1.0}"
-
-#sleep 0.5
-sleep 0.5
-
-#rotate_to(2, 0)
-ros2 action send_goal /rotate_to xplanar_interfaces/action/RotateTo \
-  "{mover_id: 2, angle: 0.0, additional_turns: 0, velocity: 1.0}"
-
-#sleep 0.5
-sleep 0.5
-
 #move_z(2, 6.0)
 ros2 action send_goal /move_z xplanar_interfaces/action/MoveZ \
   "{mover_id: 2, z: 6.0, velocity: 50.0}"
@@ -124,6 +110,20 @@ sleep 0.5
 #move_z(2, 2.0)
 ros2 action send_goal /move_z xplanar_interfaces/action/MoveZ \
   "{mover_id: 2, z: 2.0, velocity: 50.0}"
+
+#rotate_to(2, -6*math.pi/2). This is typically where the script will fail and "setpoint is unreachable"
+ros2 action send_goal /rotate_to xplanar_interfaces/action/RotateTo \
+  "{mover_id: 2, angle: -9.42477796076938, additional_turns: 0, velocity: 1.0}"
+
+#sleep 0.5
+sleep 0.5
+
+#rotate_to(2, 0)
+ros2 action send_goal /rotate_to xplanar_interfaces/action/RotateTo \
+  "{mover_id: 2, angle: 0.0, additional_turns: 0, velocity: 1.0}"
+
+#sleep 0.5
+sleep 0.5  
 
 #smart_move_to(1, 120.0, 120.0, velocity=10)
 ros2 action send_goal /move_to xplanar_interfaces/action/MoveTo \
