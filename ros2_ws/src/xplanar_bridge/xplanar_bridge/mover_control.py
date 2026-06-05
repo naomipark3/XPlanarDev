@@ -492,7 +492,7 @@ class XPlanarController:
         return MoveResult(False, 0, f"Tilt TIMEOUT after {timeout}s")
     
     def rotate_to(self, mover_id: int, angle: float, additional_turns: int = 0,
-              velocity: float = 30.0, accel: float = 10.0, decel: float = 10.0,
+              velocity: float = 5.0, accel: float = 10.0, decel: float = 10.0,
               block: bool = True, timeout: float = 45.0,
               poll_interval: float = 0.05, on_progress=None) -> MoveResult:
         """
@@ -609,7 +609,7 @@ if __name__ == "__main__":
         local_ip="192.168.1.1" #changed for ubuntu
     )
     system.connect()
-    #system.initialize()
+    system.initialize()
 
     try:
         positions = system.get_all_mover_positions()
@@ -618,11 +618,60 @@ if __name__ == "__main__":
             print(f"Mover {m} at ({px:.1f}, {py:.1f}, {pz:.3f})")
 
         #Example: move mover 1 to a target, routing around mover 2 if needed
+        # system.rotate_to(2, -5*math.pi/2)
+        # system.smart_move_to(2, 152.8, 312.0)
+        # system.smart_move_to(2, 180.0, 350.0, velocity=10)
+        # system.tilt_to(1, 0.0, axis="A")
+        system.smart_move_to(1, 120.0, 120.0, velocity=10)
+        system.smart_move_to(2, 120.0, 320.0, velocity=10)
+
+        system.rotate_to(1, 6*math.pi/2)
+        time.sleep(0.5)
+        system.rotate_to(1, 0)
+
+        time.sleep(0.5)
+
+        system.move_z(1, 6.0)
+        system.tilt_to(1, 1.0, axis="A")
+        system.tilt_to(1, 0.0, axis="A")
+        time.sleep(0.5)
+        system.tilt_to(1, -1.0, axis="A")
+        system.tilt_to(1, 0.0, axis="A")
+        time.sleep(0.5)
+        system.move_z(1, 2.0)
+
+        time.sleep(1.0)
+        #system.rotate_to(2, 8*math.pi/2)
+
+        system.smart_move_to(1, 160.0, 100.0, velocity=10)
+        time.sleep(0.5)
+        system.smart_move_to(2, 80.0, 360.0, velocity=10)
+
+        time.sleep(0.5)
+
+        system.rotate_to(2, -6*math.pi/2)
+        time.sleep(0.5)
+        system.rotate_to(2, 0)
+
+        time.sleep(0.5)
+
+        system.move_z(2, 6.0)
+        system.tilt_to(2, 1.0, axis="B")
+        system.tilt_to(2, 0.0, axis="B")
+        time.sleep(0.5)
+        system.tilt_to(2, -1.0, axis="B")
+        system.tilt_to(2, 0.0, axis="B")
+        time.sleep(0.5)
+        system.move_z(2, 2.0)
+
+        system.smart_move_to(1, 120.0, 120.0, velocity=10)
+        system.smart_move_to(2, 120.0, 320.0, velocity=10)
+
+        #system.rotate_to(1, -10*math.pi/2)
         #system.rotate_to(2, -5*math.pi/2)
-        #system.smart_move_to(2, 152.8, 312.0)
-        #system.smart_move_to(2, 180.0, 350.0, velocity=10)
+
+        #system.move_z(1, 2.0) 
         #system.tilt_to(1, 0.0, axis="A")
-        system.move_z(1, 2.0) 
 
     finally:
         system.disconnect()
