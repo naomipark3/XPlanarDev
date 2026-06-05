@@ -76,7 +76,7 @@ sleep 0.5
 
 #smart_move_to(2, 80.0, 360.0, velocity=10)
 ros2 action send_goal /move_to xplanar_interfaces/action/MoveTo \
-  "{mover_id: 2, x: 80.0, y: 360.0, velocity: 10.0}"
+  "{mover_id: 2, x: 90.0, y: 380.0, velocity: 10.0}"
 
 #sleep 0.5
 sleep 0.5
