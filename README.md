@@ -90,4 +90,4 @@ Send a closed-loop vertical move command:
 ros2 action send_goal /move_z xplanar_interfaces/action/MoveZ "{mover_id: 1, z: 6.0, velocity: 50.0}" --feedback
 ```
 
-The action servers continuously stream feedback during execution. The move_to server reports the mover's current position and remaining distance to the goal, while tilt_to and rotate_to report the mover's current angle on the relevant axis, and move_z reports the mover's current Z position.
+The action servers continuously stream feedback during execution. The move_to server reports the mover's current position and remaining distance to the goal, while tilt_to and rotate_to report the mover's current angle on the relevant axis, and move_z reports the mover's current Z position. A comprehensive demo script demo_routine.sh, including example commands of MoveTo, RotateTo, TiltTo, and MoveZ, is provided in the following location: ~/Desktop/XPlanarDev/ros2_ws/demos. 
